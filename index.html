@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code with a Robot</title>
+
+<!-- FONT: one clean modern family (Sora) from Google Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600&display=swap" rel="stylesheet">
+
+<style>
+  /* ---------- 1. BASIC LOOK ---------- */
+  :root {
+    --bg: #05070b;        /* very dark background */
+    --cyan: #00e5ff;      /* the ONE neon accent colour */
+    --text: #eaf6fb;      /* main text colour */
+    --muted: #9fb3bf;     /* softer text colour for sentences */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+               font-family: "Sora", system-ui, sans-serif; }
+
+  /* ---------- 2. THE 3D CANVAS ---------- */
+  /* "fixed" means it stays on screen while the page scrolls.
+     z-index 0 puts it BEHIND the text. pointer-events none lets you
+     scroll/click "through" it. */
+  #scene { position: fixed; inset: 0; width: 100%; height: 100%;
+           z-index: 0; pointer-events: none; display: block; }
+
+  /* ---------- 3. SCROLL PROGRESS BAR (thin line at the top) ---------- */
+  #bar { position: fixed; top: 0; left: 0; width: 100%; height: 3px;
+         background: var(--cyan); box-shadow: 0 0 12px var(--cyan);
+         transform: scaleX(0); transform-origin: left; z-index: 10; }
+
+  /* ---------- 4. THE FIVE SECTIONS ---------- */
+  /* Each section is exactly one screen tall (100vh). */
+  .panel { position: relative; z-index: 1; height: 100vh; min-height: 480px;
+           display: flex; padding: 0 8vw 9vh; align-items: flex-end;
+           justify-content: center; text-align: center; }
+  .copy { max-width: 34ch; text-shadow: 0 2px 24px var(--bg); }
+
+  /* Section positions on a big screen: text goes opposite to the robot */
+  #p2 { justify-content: flex-start; align-items: center; padding-bottom: 0; text-align: left; }
+  #p3 { justify-content: flex-end;   align-items: center; padding-bottom: 0; text-align: left; }
+
+  h1 { margin: 0 0 .6rem; font-weight: 600; letter-spacing: -0.03em;
+       font-size: clamp(2.6rem, 8vw, 5.5rem); line-height: 1; }
+  h2 { margin: 0 0 .5rem; font-weight: 600; letter-spacing: -0.01em;
+       font-size: clamp(1.25rem, 2.4vw, 1.9rem); }
+  p  { margin: 0; font-weight: 300; color: var(--muted);
+       font-size: clamp(.95rem, 1.3vw, 1.1rem); line-height: 1.6; }
+  #p1 .copy, #p1 p { max-width: 38ch; margin-inline: auto; }
+
+  /* ---------- 5. PHONES ---------- */
+  /* On small screens the robot stays centred, so ALL text goes to the bottom. */
+  @media (max-width: 767px) {
+    #p2, #p3 { justify-content: center; align-items: flex-end;
+               padding-bottom: 7vh; text-align: center; }
+    .panel { padding-bottom: 7vh; }
+  }
+</style>
+</head>
+<body>
+
+<div id="bar"></div>
+<canvas id="scene"></canvas>
+
+<!-- #scroller wraps all sections. GSAP measures its height to know
+     how far you have scrolled (0% at the top, 100% at the bottom). -->
+<main id="scroller">
+  <section class="panel" id="p1"><div class="copy">
+    <h1>Code with a Robot</h1>
+    <p>Meet the helper that writes, explains, and checks code with you.</p>
+  </div></section>
+
+  <section class="panel" id="p2"><div class="copy">
+    <h2>Say what you need</h2>
+    <p>Describe what you want, and the robot writes the first draft.</p>
+  </div></section>
+
+  <section class="panel" id="p3"><div class="copy">
+    <h2>Learn as you go</h2>
+    <p>Ask it to explain every line until you understand.</p>
+  </div></section>
+
+  <section class="panel" id="p4"><div class="copy">
+    <h2>You stay in charge.</h2>
+    <p>Review, test, and improve the code.</p>
+  </div></section>
+
+  <section class="panel" id="p5"><div class="copy">
+    <h2>Start building today.</h2>
+    <p>Open your editor, say hello, and let the robot help.</p>
+  </div></section>
+</main>
+
+<!-- LIBRARIES (exact versions, from cdnjs): Three.js = 3D, GSAP = animation,
+     ScrollTrigger = links animation to scrolling -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+
+<script>
+gsap.registerPlugin(ScrollTrigger);
+
+// Some people turn on "reduce motion" in their device. We respect that
+// by switching off the idle swaying and the waving wiggle.
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* =====================================================================
+   A. SCENE, CAMERA, RENDERER  (the "stage", the "eye", and the "painter")
+   ===================================================================== */
+const canvas = document.getElementById("scene");
+const scene  = new THREE.Scene();
+scene.background = new THREE.Color(0x05070b);
+scene.fog = new THREE.Fog(0x05070b, 10, 22);        // far things fade into the dark
+
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 100);
+const isMobile = () => innerWidth < 768;
+camera.position.z = isMobile() ? 9 : 7;              // phones: step back so robot fits
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputEncoding = THREE.sRGBEncoding;
+
+/* =====================================================================
+   B. LIGHTS  (soft light so the white robot looks glossy)
+   ===================================================================== */
+scene.add(new THREE.HemisphereLight(0xcfe9ff, 0x0a0f18, 0.9));   // soft all-over light
+
+const key = new THREE.DirectionalLight(0xffffff, 1.1);           // main white light
+key.position.set(3, 4, 5);
+scene.add(key);
+
+const rim = new THREE.DirectionalLight(0x00e5ff, 1.4);           // cyan edge light from behind
+rim.position.set(-4, 2, -3);
+scene.add(rim);
+
+/* =====================================================================
+   C. MATERIALS  (what each surface is "made of")
+   ===================================================================== */
+const CYAN   = 0x00e5ff;
+const matWhite = new THREE.MeshStandardMaterial({ color: 0xe9edf1, roughness: 0.35, metalness: 0.15 });
+const matDark  = new THREE.MeshStandardMaterial({ color: 0x14171c, roughness: 0.3,  metalness: 0.5  });
+const matGrey  = new THREE.MeshStandardMaterial({ color: 0x9aa1ab, roughness: 0.4,  metalness: 0.5  });
+const matGlow  = new THREE.MeshBasicMaterial({ color: CYAN });    // Basic = not affected by light, so it "glows"
+
+// A soft round blob of cyan light, drawn on a tiny canvas.
+// We stick it on the eyes/chest to fake a glow (cheap and pretty).
+function glowTexture() {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const g = c.getContext("2d");
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0,   "rgba(0,229,255,1)");
+  grad.addColorStop(0.35,"rgba(0,229,255,0.35)");
+  grad.addColorStop(1,   "rgba(0,229,255,0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+const glowTex = glowTexture();
+function glow(parent, x, y, z, size) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+  s.position.set(x, y, z);
+  s.scale.set(size, size, 1);
+  parent.add(s);
+  return s;
+}
+
+// Small helper: make a shape, give it a material, place it, add it to a parent.
+function part(parent, geometry, material, x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1) {
+  const m = new THREE.Mesh(geometry, material);
+  m.position.set(x, y, z);
+  m.scale.set(sx, sy, sz);
+  parent.add(m);
+  return m;
+}
+
+/* =====================================================================
+   D. BUILD THE ROBOT  (matches your video: white body, black visor face,
+      cyan eyes + smile, glowing chest ring and waist ring)
+      "robot" is a Group = a box that holds all the parts together,
+      so moving/rotating the group moves the whole robot.
+   ===================================================================== */
+const robot = new THREE.Group();
+scene.add(robot);
+
+/* ---- HEAD ---- */
+const head = new THREE.Group();
+head.position.set(0, 1.45, 0);
+robot.add(head);
+
+part(head, new THREE.SphereGeometry(0.6, 40, 28), matWhite, 0, 0, 0, 1.1, 1, 0.95); // rounded white head
+part(head, new THREE.SphereGeometry(0.5, 40, 28), matDark, 0, 0, 0.36, 1, 0.8, 0.5); // black visor (flattened ball)
+
+// Eyes: two small cyan discs. We keep them in a group so we can blink them.
+const eyes = new THREE.Group();
+head.add(eyes);
+[-0.17, 0.17].forEach(x => {
+  part(eyes, new THREE.CircleGeometry(0.085, 24), matGlow, x, 0.1, 0.605);
+  glow(eyes, x, 0.1, 0.62, 0.45);                                  // soft glow around each eye
+});
+
+// Smile: half of a thin ring (a torus) turned upside down
+const smile = part(head, new THREE.TorusGeometry(0.13, 0.014, 8, 24, Math.PI), matGlow, 0, -0.02, 0.6);
+smile.rotation.z = Math.PI;
+
+// Side "ears": dark discs with a thin cyan ring
+[-1, 1].forEach(side => {
+  const ear = part(head, new THREE.CylinderGeometry(0.2, 0.2, 0.08, 24), matDark, side * 0.64, 0, 0);
+  ear.rotation.z = Math.PI / 2;
+  const ring = part(head, new THREE.TorusGeometry(0.12, 0.012, 8, 24), matGlow, side * 0.69, 0, 0);
+  ring.rotation.y = Math.PI / 2;
+});
+
+/* ---- NECK ---- */
+const neck = part(robot, new THREE.TorusGeometry(0.2, 0.03, 8, 32), matGlow, 0, 0.98, 0);
+neck.rotation.x = Math.PI / 2;
+
+/* ---- CHEST (a squashed ball) + glowing round "reactor" ---- */
+part(robot, new THREE.SphereGeometry(1, 40, 28), matWhite, 0, 0.45, 0, 0.72, 0.65, 0.5);
+part(robot, new THREE.CircleGeometry(0.11, 32), matDark, 0, 0.55, 0.503);
+part(robot, new THREE.TorusGeometry(0.12, 0.025, 12, 32), matGlow, 0, 0.55, 0.505);
+part(robot, new THREE.CircleGeometry(0.05, 24), matGlow, 0, 0.55, 0.508);
+glow(robot, 0, 0.55, 0.53, 0.55);
+
+/* ---- WAIST (dark band with a cyan ring) + PELVIS ---- */
+part(robot, new THREE.CylinderGeometry(0.3, 0.28, 0.22, 32), matDark, 0, -0.15, 0);
+const waistRing = part(robot, new THREE.TorusGeometry(0.31, 0.03, 8, 40), matGlow, 0, -0.12, 0);
+waistRing.rotation.x = Math.PI / 2;
+part(robot, new THREE.SphereGeometry(1, 32, 24), matWhite, 0, -0.5, 0, 0.5, 0.3, 0.36);
+
+/* ---- LEGS ---- */
+[-1, 1].forEach(side => {
+  const x = side * 0.26;
+  part(robot, new THREE.SphereGeometry(0.17, 20, 16), matGrey, x, -0.65, 0);                 // hip joint
+  part(robot, new THREE.CylinderGeometry(0.16, 0.14, 0.55, 20), matWhite, x, -1.0, 0);        // thigh
+  part(robot, new THREE.SphereGeometry(0.14, 20, 16), matGrey, x, -1.3, 0);                   // knee
+  part(robot, new THREE.CylinderGeometry(0.14, 0.11, 0.5, 20), matWhite, x, -1.55, 0);         // shin
+  part(robot, new THREE.BoxGeometry(0.26, 0.14, 0.44), matWhite, x, -1.87, 0.06);              // foot
+});
+
+/* ---- ARMS ----
+   Each arm is built from TWO groups that can rotate like real joints:
+   "shoulder" (swings the whole arm) and "elbow" (swings the forearm).
+   side = +1 is the arm on the viewer's right, -1 on the left. */
+function makeArm(side) {
+  const shoulder = new THREE.Group();
+  shoulder.position.set(side * 0.86, 0.85, 0);
+  robot.add(shoulder);
+
+  part(shoulder, new THREE.SphereGeometry(0.2, 24, 16), matGrey);                                 // shoulder ball
+  part(shoulder, new THREE.CylinderGeometry(0.15, 0.13, 0.6, 24), matWhite, 0, -0.38, 0);         // upper arm
+
+  const elbow = new THREE.Group();
+  elbow.position.set(0, -0.72, 0);
+  shoulder.add(elbow);
+
+  part(elbow, new THREE.SphereGeometry(0.13, 20, 16), matGrey);                                   // elbow ball
+  part(elbow, new THREE.CylinderGeometry(0.14, 0.12, 0.55, 24), matWhite, 0, -0.32, 0);           // forearm
+  const band = part(elbow, new THREE.TorusGeometry(0.13, 0.015, 8, 24), matGlow, 0, -0.5, 0);     // cyan wrist band
+  band.rotation.x = Math.PI / 2;
+  part(elbow, new THREE.SphereGeometry(0.15, 20, 16), matWhite, 0, -0.68, 0, 0.9, 1.2, 0.7);      // hand
+  return { shoulder, elbow };
+}
+const armWave = makeArm(+1);   // this arm does the waving at the end
+const armIdle = makeArm(-1);   // this arm just hangs and sways a little
+
+// A faint cyan light on the front so the chest/face glow tints the white body
+const chestLight = new THREE.PointLight(CYAN, 0.7, 4);
+chestLight.position.set(0, 0.5, 1);
+robot.add(chestLight);
+
+/* =====================================================================
+   E. FLOATING PARTICLES  (tiny cyan dots drifting in the background)
+   ===================================================================== */
+const COUNT = 700;
+const pos = new Float32Array(COUNT * 3);
+for (let i = 0; i < COUNT; i++) {
+  pos[i * 3]     = (Math.random() - 0.5) * 24;   // x
+  pos[i * 3 + 1] = (Math.random() - 0.5) * 16;   // y
+  pos[i * 3 + 2] = -10 + Math.random() * 12;     // z (depth)
+}
+const pGeo = new THREE.BufferGeometry();
+pGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+const particles = new THREE.Points(pGeo, new THREE.PointsMaterial({
+  color: CYAN, size: 0.04, transparent: true, opacity: 0.7, depthWrite: false }));
+scene.add(particles);
+
+/* =====================================================================
+   F. THE "STATE" OBJECT  (the heart of the scroll effect)
+   Scrolling never moves the robot directly. Instead GSAP changes the
+   numbers in this object, and every frame we copy those numbers onto
+   the robot. This keeps the movement smooth.
+     x, y   = where the robot sits       s    = its size
+     rotY   = how far it is turned       sway = idle left/right wobble
+     wave   = 0 (arm down) to 1 (waving) prog = scroll progress 0..1
+   ===================================================================== */
+const state = { x: 0, y: 0.5, s: 0.85, rotY: 0, sway: 1, wave: 0, prog: 0 };
+
+/* Where the robot should be at each of the 5 sections.
+   Phones get different numbers: robot stays centred and sits higher
+   so the text at the bottom never covers it. */
+function layout() {
+  if (isMobile()) {
+    return {
+      hero: { x: 0, y: 0.9,   s: 0.8, rotY: 0,               sway: 1,   wave: 0 },
+      s2:   { x: 0, y: 0.9,   s: 0.8, rotY: -Math.PI / 2,    sway: 0.1, wave: 0 }, // turn 90 degrees
+      s3:   { x: 0, y: -1.46, s: 1.7, rotY: 0.5,             sway: 0.1, wave: 0 }, // zoom on head
+      s4:   { x: 0, y: 0.9,   s: 0.8, rotY: Math.PI * 2,     sway: 0.1, wave: 0 }, // spin round
+      s5:   { x: 0, y: 0.9,   s: 0.8, rotY: Math.PI * 2,     sway: 0.1, wave: 1 }  // wave
+    };
+  }
+  return {
+    hero: { x: 0,    y: 0.5,   s: 0.85, rotY: 0,            sway: 1,   wave: 0 },
+    s2:   { x: 2.3,  y: 0.1,   s: 1,    rotY: -Math.PI / 2, sway: 0.1, wave: 0 }, // right side, turned 90 degrees
+    s3:   { x: -2.3, y: -2.89, s: 2.2,  rotY: 0.6,          sway: 0.1, wave: 0 }, // left side, zoomed on head
+    s4:   { x: 0,    y: 0.5,   s: 0.85, rotY: Math.PI * 2,  sway: 0.1, wave: 0 }, // back to centre, full spin
+    s5:   { x: 0,    y: 0.5,   s: 0.85, rotY: Math.PI * 2,  sway: 0.1, wave: 1 }  // waving
+  };
+}
+
+/* =====================================================================
+   G. LINK SCROLLING TO THE ROBOT (GSAP timeline + ScrollTrigger)
+   The timeline has 4 steps, each 1 unit long. "scrub: 1.2" means the
+   timeline follows the scrollbar, catching up smoothly over ~1.2s.
+   ===================================================================== */
+let tl = null;
+let wasMobile = isMobile();
+
+function buildTimeline() {
+  if (tl) { tl.scrollTrigger.kill(); tl.kill(); }      // remove the old one (used when screen size category changes)
+  const L = layout();
+  gsap.set(state, L.hero);                              // start at the hero pose
+
+  tl = gsap.timeline({
+    defaults: { duration: 1, ease: "power1.inOut" },
+    scrollTrigger: {
+      trigger: "#scroller",
+      start: "top top",
+      end: "bottom bottom",
+      scrub: 1.2,
+      onUpdate: self => { state.prog = self.progress; }
+    }
+  });
+  tl.to(state, L.s2, 0)   // scroll section 1 -> 2
+    .to(state, L.s3, 1)   // 2 -> 3
+    .to(state, L.s4, 2)   // 3 -> 4
+    .to(state, L.s5, 3);  // 4 -> 5
+}
+buildTimeline();
+
+/* ---- TEXT FADES ----
+   Each section's text fades in as it enters the screen, and each
+   section fades out as it leaves (the hero starts visible, the last
+   one stays). */
+const panels = gsap.utils.toArray(".panel");
+panels.forEach((panel, i) => {
+  const copy = panel.querySelector(".copy");
+  if (i > 0) {
+    gsap.fromTo(copy, { opacity: 0, y: 40 }, {
+      opacity: 1, y: 0, ease: "none",
+      scrollTrigger: { trigger: panel, start: "top 75%", end: "top 35%", scrub: true }
+    });
+  }
+  if (i < panels.length - 1) {
+    gsap.to(panel, {
+      opacity: 0, ease: "none",
+      scrollTrigger: { trigger: panel, start: "bottom 65%", end: "bottom 25%", scrub: true }
+    });
+  }
+});
+
+/* ---- PROGRESS BAR ---- grows from 0 to full width as you scroll */
+gsap.to("#bar", {
+  scaleX: 1, ease: "none",
+  scrollTrigger: { trigger: document.body, start: "top top", end: "bottom bottom", scrub: 0.2 }
+});
+
+/* =====================================================================
+   H. RESIZE  (keep everything correct if the window changes size)
+   ===================================================================== */
+addEventListener("resize", () => {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.position.z = isMobile() ? 9 : 7;
+  camera.updateProjectionMatrix();
+
+  // If we crossed between "phone" and "desktop", rebuild with the other layout
+  if (isMobile() !== wasMobile) {
+    wasMobile = isMobile();
+    buildTimeline();
+  }
+});
+
+/* =====================================================================
+   I. THE RENDER LOOP  (runs about 60 times per second)
+   Each frame: copy the numbers from "state" onto the robot, add the
+   small idle movements (floating, blinking, waving), and draw.
+   ===================================================================== */
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  const motion = reduceMotion ? 0 : 1;
+
+  // Position, size and turn come from the scroll-driven state
+  robot.position.set(state.x, state.y + Math.sin(t * 1.5) * 0.04 * motion, 0);  // gentle floating
+  robot.scale.setScalar(state.s);
+  robot.rotation.y = state.rotY + Math.sin(t * 0.6) * 0.35 * state.sway * motion; // slow turning in the hero
+
+  // Blink: every 4 seconds the eyes squash flat for a moment
+  eyes.scale.y = (t % 4 < 0.12 && motion) ? 0.1 : 1;
+
+  // Waving arm: raise it as "wave" goes from 0 to 1, then wiggle the forearm
+  const w = state.wave;
+  armWave.shoulder.rotation.z = THREE.MathUtils.lerp(0.06, 2.45, w);
+  armWave.elbow.rotation.z    = w * (0.35 + Math.sin(t * 9) * 0.45 * motion);
+
+  // Other arm hangs and sways slightly
+  armIdle.shoulder.rotation.z = -0.06 + Math.sin(t * 1.2) * 0.03 * motion;
+
+  // Particles drift slowly and shift as you scroll (gives depth)
+  particles.rotation.y = t * 0.02 * motion + state.prog * 1.5;
+  particles.position.y = state.prog * 1.2;
+
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
